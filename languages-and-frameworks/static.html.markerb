@@ -9,7 +9,7 @@ redirect_from: /docs/getting-started/static/
 
 To be fair, a static site isn't an app. So we're really talking about **deploying an app to serve some static content.**
 
-In this demonstration, we'll use [goStatic](https://github.com/PierreZ/goStatic), a tiny web server written in Go that lets us serve static files with very little configuration. We'll provide a Dockerfile and our content for Fly to transmogrify into a web server running in a VM.
+In this demonstration, we'll use [Caddy](https://github.com/caddyserver/caddy), a statically linked web server written in Go that lets us serve static files with very little configuration. We'll provide a Dockerfile and our content for Fly to transmogrify into a web server running in a VM.
 
 You can clone all the files needed for this example from [the hello-static GitHub repository](https://github.com/fly-apps/hello-static) to a local directory:
 
@@ -75,18 +75,34 @@ Here's `goodbye.html`.
 
 ### _The Dockerfile_
 
-goStatic is designed to run in a container, and the [image](https://hub.docker.com/r/pierrezemb/gostatic) is available at Docker Hub. This is super convenient for us, because Fly apps need container images too!
+Caddy is available as a Docker container, and the [image](https://hub.docker.com/_/caddy) is available at Docker Hub. This is super convenient for us, because Fly apps need container images too!
 
-We can use the goStatic image as a base image. We just have to copy our site's files to `/srv/http/` in the image.
+We can use the Caddy image as a base image. We just have to copy our site's files to `/usr/share/caddy` in the image.
 
 Here's our Dockerfile to do that:
 
 ```docker
-FROM pierrezemb/gostatic
-COPY ./public/ /srv/http/
+FROM caddy:2.7.6-alpine
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY ./public/ /usr/share/caddy
 ```
 
 The Dockerfile should be placed in the working directory (here, `hello-static`).
+
+We now need the Caddyfile to configure Caddy.
+
+```Caddy
+:8043 {
+	root * /usr/share/caddy
+	file_server
+	handle /health_check {
+		respond "OK"
+	}
+}
+```
+This file declare a server listening on port 8043 and serves files from `/usr/share/caddy`. There is an additional directive, `handle` indicate to the Caddy server to respond "OK" to request on `/health_check`.
+The Caddyfile should be placed alongside the Dockerfile.
+
 
 ### _Configuring the App for Fly.io_
 
@@ -102,7 +118,7 @@ flyctl launch
 Creating app in /Users/chris/trystatic/hello-static
 Scanning source code
 Detected a Dockerfile app
-? App Name (leave blank to use an auto-generated name): gostatic-example
+? App Name (leave blank to use an auto-generated name): caddy-example
 Automatically selected personal organization: Chris Nicoll
 ? Select region: ewr (Secaucus, NJ (US))
 Created app gostatic-example in organization personal
@@ -114,16 +130,25 @@ Your app is ready. Deploy with `flyctl deploy`
 
 This has configured the app with some default parameters, and generated a `fly.toml` configuration file for us.
 
-Before deploying, we need to do one more thing. goStatic listens on port 8043 by default, but the default `fly.toml` assumes port 8080. Edit `internal_port` in the [`services`](/docs/reference/configuration/#the-services-sections) section to reflect this:
+Before deploying, we need to do one more thing. We instructed Caddy to listen on port 8043, but the default `fly.toml` assumes port 8080. Edit `internal_port` in the [`services`](/docs/reference/configuration/#the-services-sections) section to reflect this:
 
 ```toml
 [[services]]
-  http_checks = []
   internal_port = 8043
   processes = ["app"]
   protocol = "tcp"
-  script_checks = []
-  ```
+```
+
+Furthermore, we can ask the Fly infrastructure to perform health checks automatically for us.
+
+```toml
+[[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health_check'
+```
 
 Now we're ready to deploy:
 
@@ -148,7 +173,7 @@ The quickest way to browse your newly deployed application is with the `flyctl a
 flyctl apps open
 ```
 ```output
-opening https://gostatic-example.fly.dev ...
+opening https://caddy-example.fly.dev ...
 ```
 
 Your browser will be sent to the displayed URL.
